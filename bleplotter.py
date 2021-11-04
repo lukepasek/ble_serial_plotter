@@ -11,12 +11,17 @@ from collections import deque
 import time
 import asyncio
 
-# try:
-#     import OpenGL
-#     pyqtgraph.setConfigOption('useOpenGL', True)
-#     #pyqtgraph.setConfigOption('enableExperimental', True)
-# except Exception as e:
-#     print(f"Enabling OpenGL failed with {e}. Will result in slow rendering. Try installing PyOpenGL.")
+enableOpenGl = False
+
+if enableOpenGl:
+    try:
+
+        import OpenGL
+        pyqtgraph.setConfigOption('useOpenGL', True)
+        #pyqtgraph.setConfigOption('enableExperimental', True)
+    except Exception as e:
+        print(
+            f"Enabling OpenGL failed with {e}. Will result in slow rendering. Try installing PyOpenGL.")
 
 SERIAL_SVC_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 SERIAL_CHR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
@@ -25,10 +30,10 @@ SERIAL_CHR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 # port = '/dev/ttyUSB0'
 # port = 'ble://50:65:83:6D:F6:73'
 port = 'ble://D0:B5:C2:94:3A:98'
-# D0B5C2943A98
 port_speed = 115200
 
 app = QtGui.QApplication([])
+app.setWindowIcon(QtGui.QIcon("icon.png"))
 ble_client = None
 close_event = None
 ctrl_c_cnt = 0
@@ -38,20 +43,20 @@ start_time = time.monotonic_ns()
 num_samples = 30000
 max_range = 600
 
-pyqtgraph.setConfigOption('antialias', True)
+# pyqtgraph.setConfigOption('antialias', True)
 pyqtgraph.setConfigOption('background', "#202020")
 p = pyqtgraph.plot()
 p.setYRange(-1, 38, padding=0)
 p.setXRange(0, max_range, padding=0)
 p.resize(900, 900)
 
-labels = ["vi", "vo", "io", "duty"]
+labels = ["vi", "vo", "io", "ib"]
 
 colors = {
     "vi": 'r',
     "vo": 'y',
     "io": 'm',
-    "duty": 'g',
+    "ib": 'g',
     "pwr": 'w'
 }
 
@@ -147,7 +152,7 @@ class StreamParser:
                     tag_parse = True
                     tag.clear()
                     val.clear()
-                elif c == 46 or c >= 48 and c <= 57:
+                elif c == 45 or c == 46 or c >= 48 and c <= 57:
                     val.append(c)
         if (len(tag) > 0 and len(val) > 0):
             values[tag.decode('ascii')] = float(str(val.decode('ascii')))
