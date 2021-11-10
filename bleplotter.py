@@ -18,7 +18,7 @@ if enableOpenGl:
 
         import OpenGL
         pyqtgraph.setConfigOption('useOpenGL', True)
-        #pyqtgraph.setConfigOption('enableExperimental', True)
+        pyqtgraph.setConfigOption('enableExperimental', True)
     except Exception as e:
         print(
             f"Enabling OpenGL failed with {e}. Will result in slow rendering. Try installing PyOpenGL.")
@@ -33,7 +33,7 @@ port = 'ble://D0:B5:C2:94:3A:98'
 port_speed = 115200
 
 app = QtGui.QApplication([])
-app.setWindowIcon(QtGui.QIcon("icon.png"))
+app.setWindowIcon(QtGui.QIcon("icon3.png"))
 ble_client = None
 close_event = None
 ctrl_c_cnt = 0
@@ -46,8 +46,9 @@ max_range = 600
 # pyqtgraph.setConfigOption('antialias', True)
 pyqtgraph.setConfigOption('background', "#202020")
 p = pyqtgraph.plot()
-p.setYRange(-1, 38, padding=0)
+p.setYRange(-20, 20, padding=0)
 p.setXRange(0, max_range, padding=0)
+p.showGrid(x = True, y = True, alpha = 0.3)       
 p.resize(900, 900)
 
 labels = ["vi", "vo", "io", "ib"]
@@ -89,7 +90,6 @@ for l in labels:
 # p.addItem(vout_high)
 # p.addItem(iout_max)
 
-
 def plot(values):
     global cnt, t
     cnt += 1
@@ -128,9 +128,13 @@ def plot(values):
 class StreamParser:
     eol = b'\n'
     line_buffer = bytearray()
-    def line_callback(v): return print("parsed values:", v)
+    # def line_callback(v): return print("parsed values:", v)
 
     def __init__(self, callback):
+        if (callable(callback)):
+            self.line_callback = callback
+
+    def set_callback(self, callback):
         if (callable(callback)):
             self.line_callback = callback
 
@@ -258,7 +262,16 @@ def signalHandler(sig, frame):
 def main():
     global close, parser
     print()
-    parser = StreamParser(plot)
+
+    parser = StreamParser(None)
+
+    def plot_init(values):
+        ts = values["t"]/1000
+        p.setXRange(ts, ts+max_range, padding=0)
+        print("--- Plot range start moved to ", ts)
+        parser.set_callback(plot)
+    
+    parser.set_callback(plot_init)
 
     if port.startswith('ble://'):
         address = port[6:]
@@ -298,7 +311,10 @@ def main():
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signalHandler)
-    signal.signal(signal.SIGQUIT, signalHandler)
+    try:
+        signal.signal(signal.SIGQUIT, signalHandler)
+    except AttributeError:
+        pass
     # signal.signal(signal.SIGKILL, signalHandler)
     signal.signal(signal.SIGTERM, signalHandler)
     main()
