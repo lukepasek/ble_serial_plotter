@@ -1,3 +1,4 @@
+from logging import shutdown
 from pyqtgraph.Qt import QtGui, QtCore
 import numpy as np
 import pyqtgraph
@@ -29,31 +30,22 @@ SERIAL_CHR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
 # port = '/dev/ttyUSB0'
 # port = 'ble://50:65:83:6D:F6:73'
-port = 'ble://D0:B5:C2:94:3A:98'
+# port = 'ble://D0:B5:C2:94:3A:98'
+port = "test"
 port_speed = 115200
 reconnect = True
-
-app = QtGui.QApplication([])
-app.setWindowIcon(QtGui.QIcon("icon3.png"))
 ble_client = None
 close_event = None
 ctrl_c_cnt = 0
 parser = None
 start_time = time.monotonic_ns()
-
 num_samples = 30000
 max_range = 600
-
-# pyqtgraph.setConfigOption('antialias', True)
-pyqtgraph.setConfigOption('background', "#202020")
-p = pyqtgraph.plot()
-p.setYRange(-20, 20, padding=0)
-p.setXRange(0, max_range, padding=0)
-p.showGrid(x=True, y=True, alpha=0.3)
-p.resize(900, 900)
-
+serial_port = None
+t = deque([])
+cnt = -1
+sample_frame = None
 labels = ["vi", "vo", "io", "ib"]
-
 colors = {
     "vi": 'r',
     "vo": 'y',
@@ -61,36 +53,52 @@ colors = {
     "ib": 'g',
     "pwr": 'w'
 }
-
 curves = {}
 data = {}
+plotWidget = None
 
-serial_port = None
-t = deque([])
-cnt = -1
-sample_frame = None
+def initQtApp():
+    global plotWidget
+    QtGui.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
+    QtGui.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps)
+    app = QtGui.QApplication([])
+    app.setWindowIcon(QtGui.QIcon("icon3.png"))
+    # pyqtgraph.setConfigOption('antialias', True)
+    pyqtgraph.setConfigOption('background', "#202020")
+    plotWidget = pyqtgraph.plot()
+    plotWidget.clipToView=True
+    plotWidget.autoDownsample=True
+    plotWidget.skipFiniteCheck=True
+    plotWidget.setYRange(-20, 20, padding=0)
+    plotWidget.setXRange(0, max_range, padding=0)
+    plotWidget.showGrid(x=True, y=True, alpha=0.3)
+    plotWidget.resize(800, 600)
 
-for l in labels:
-    curve = pyqtgraph.PlotCurveItem(
-        pen=({'color': colors[l], 'width': 2}), skipFiniteCheck=True, name=l)
-    p.addItem(curve)
-    curve.setPos(0, 0)
-    curves[l] = curve
-    data[l] = deque([])
 
-inf1 = pyqtgraph.InfiniteLine(movable=True, angle=0, pen='y', bounds=[-2, 38], hoverPen=(0, 200, 0), label='{value:0.2f}',
-                              labelOpts={'color': 'y', 'movable': True, 'fill': (0, 0, 200, 100)})
-inf1.setPos([0, 0])
-# vout_high = pg.InfiniteLine(movable=True, angle=0, pen='y', bounds=[-2, 38], hoverPen=(0, 200, 0), label='Absorbtion/Bulk out: {value:0.2f}V',
-#                             labelOpts={'color': 'y', 'movable': True, 'fill': (0, 0, 200, 100)})
-# vout_high.setPos([0, 14.7])
-# iout_max = pg.InfiniteLine(movable=True, angle=0, pen='r', bounds=[-2, 38], hoverPen=(0, 200, 0), label='Current limit: {value:0.2f}A',
-#                            labelOpts={'color': 'r', 'movable': True, 'fill': (0, 0, 200, 100)})
-# iout_max.setPos([0, 2.5])
+    for l in labels:
+        curve = pyqtgraph.PlotCurveItem(
+            pen=({'color': colors[l], 'width': 2}), skipFiniteCheck=True, name=l)
+        plotWidget.addItem(curve)
+        curve.setPos(0, 0)
+        curves[l] = curve
+        d = deque([])
+        data[l] = d
+        curve.setData(x=np.array(t, copy=False), y=np.array(d, copy=False))
 
-p.addItem(inf1)
-# p.addItem(vout_high)
-# p.addItem(iout_max)
+    inf1 = pyqtgraph.InfiniteLine(movable=True, angle=0, pen='y', hoverPen=(0, 200, 0), label='{value:0.2f}',
+                                labelOpts={'color': 'y', 'movable': True, 'fill': (0, 0, 200, 100)})
+    inf1.setPos([0, 0])
+    # vout_high = pg.InfiniteLine(movable=True, angle=0, pen='y', bounds=[-2, 38], hoverPen=(0, 200, 0), label='Absorbtion/Bulk out: {value:0.2f}V',
+    #                             labelOpts={'color': 'y', 'movable': True, 'fill': (0, 0, 200, 100)})
+    # vout_high.setPos([0, 14.7])
+    # iout_max = pg.InfiniteLine(movable=True, angle=0, pen='r', bounds=[-2, 38], hoverPen=(0, 200, 0), label='Current limit: {value:0.2f}A',
+    #                            labelOpts={'color': 'r', 'movable': True, 'fill': (0, 0, 200, 100)})
+    # iout_max.setPos([0, 2.5])
+
+    plotWidget.addItem(inf1)
+    # p.addItem(vout_high)
+    # p.addItem(iout_max)
+    return app
 
 
 def plot(values):
@@ -101,35 +109,27 @@ def plot(values):
         ts = values["t"]
     except KeyError:
         ts = (time.monotonic_ns() - start_time)/1000000
-    if cnt > num_samples:
+    if cnt >= num_samples:
         t.rotate(-1)
         t[-1] = ts
     else:
         t.append(ts)
 
-    # start = p.range.right()
-    # left = p.range.left()
-    # if ts > left:
-    #     p.setXRange(ts-p.range.width(), ts)
-
-    empty = []
     for l in labels:
+        val = None
+        c = curves[l]
+        d = data[l]
         if l in values:
-            c = curves[l]
-            d = data[l]
-            if cnt > num_samples:
-                d.rotate(-1)
-                d[-1] = values[l]
-            else:
-                d.append(values[l])
-            try:
-                c.setData(x=np.array(t, copy=False), y=np.array(d, copy=False))
-            except Exception as e:
-                print(e)
+            val = values[l]
         else:
-            empty.append(l)
-    # update_ui()
+            val = 0
 
+        if cnt >= num_samples:
+            d.rotate(-1)
+            d[-1] = val
+        else:
+            d.append(val)
+        
 
 class StreamParser:
     eol = b'\n'
@@ -146,9 +146,9 @@ class StreamParser:
     def parse_line(self, line):
         global sample_frame
         values = {}
-        tag_parse = True
         tag = bytearray()
         val = bytearray()
+        tag_parse = True
         for c in line:
             if tag_parse:
                 if c == 58:
@@ -156,16 +156,16 @@ class StreamParser:
                 elif c != 32 or c != 9:
                     tag.append(c)
             else:
-                if c == 32 or c == 9 or c == 10 or c == 13:
-                    values[tag.decode('ascii')] = float(
-                        str(val.decode('ascii')))
-                    tag_parse = True
+                if c == 45 or c == 46 or c >= 48 and c <= 57:
+                    val.append(c)
+                elif c == 32 or c == 9 or c == 10 or c == 13:
+                    values[tag.decode('ascii')] = float(val.decode('ascii'))
                     tag.clear()
                     val.clear()
-                elif c == 45 or c == 46 or c >= 48 and c <= 57:
-                    val.append(c)
+                    tag_parse = True
+
         if (len(tag) > 0 and len(val) > 0):
-            values[tag.decode('ascii')] = float(str(val.decode('ascii')))
+            values[tag.decode('ascii')] = float(val.decode('ascii'))
         sample_frame = {}
         sample_frame["__ts"] = time.monotonic_ns()
         # for index, (key, value) in enumerate(values):
@@ -195,18 +195,15 @@ class StreamParser:
             self.line_buffer = line_src[sol_ptr:]
 
 
-def update_ui():
-    # app.processEvents()
-    pass
-
-
 def poll_serial():
     global serial_port
-    if not serial_port:
-        serial_port = serial.Serial(port, port_speed)
-
-    parser.append(serial_port.readline())
-    # update_ui()
+    if not serial_port and reconnect:
+        serial_port = serial.Serial(port, port_speed, timeout=0)
+        print("--- Serial port open:", port)
+    data = serial_port.read(128)
+    while len(data) > 0:
+        parser.append(data)
+        data = serial_port.read(128)
 
 
 async def ble_serial_close():
@@ -260,6 +257,8 @@ async def ble_serial_open(address):
             if (ble_client.is_connected == True):
                 await ble_serial_close()
 
+close_app = None
+close = None
 
 def signalHandler(sig, frame):
     global ctrl_c_cnt
@@ -270,7 +269,10 @@ def signalHandler(sig, frame):
         else:
             print("--- Exiting on signal", sig)
         if ctrl_c_cnt == 0:
-            app.quit()
+            if close_app != None:
+                close_app()
+            else:
+                close()
         ctrl_c_cnt += 1
         if ctrl_c_cnt > 2:
             print("--- Terminating on repeted signal")
@@ -295,39 +297,78 @@ async def handleHttp(request):
     return web.Response(text=text)
 
 
-def http_server(loop):
-    app = web.Application()
-    app.router.add_route('GET', '/', handleHttp)
-    handler = app.make_handler()
+def initHttpServer(loop):
+    http_server = web.Application()
+    http_server.router.add_route('GET', '/', handleHttp)
+    handler = http_server.make_handler()
     f = loop.create_server(handler, '0.0.0.0', 8585)
     srv = loop.run_until_complete(f)
     return srv
 
+def update_plot():
+    plotWidget.setUpdatesEnabled(False)
+    end = t[-1]
+    if end>max_range:
+        plotWidget.setXRange(end-max_range, end, padding=0)
+    for l in labels:
+        c = curves[l]
+        d = data[l]
+        c.setData(x=np.array(t, copy=False), y=np.array(d, copy=False))
+    plotWidget.setUpdatesEnabled(True)
 
 def main():
-    global close, parser
+    global close_app, parser
     print()
 
     parser = StreamParser(None)
+    app = initQtApp()
+    def close_app():
+        app.quit()
 
     # def plot_init(values):
     #     try:
     #         ts = values["t"]
     #         p.setXRange(ts, ts+max_range, padding=0)
     #         print("--- Plot range start moved to ", ts)
-    #         parser.set_callback(plot)
+    #         parser.set_line_callback(plot)
     #     except AttributeError:
     #         pass
 
-    # parser.set_callback(plot_init)
+    # parser.set_line_callback(plot_init)
 
-    if port.startswith('ble://'):
+    parser.set_line_callback(plot)
+
+    if port == "test":
+        import random
+        tick = 0
+        print("--- Serial plotter with test data ---")
+
+        def poll_test_data():
+            nonlocal tick
+            import math
+            vi = 12 + random.randint(0, 100)/100
+            vo = 12 + random.randint(0, 100)/100
+            data = "t:"+str(tick)+" vi:"+str(vi)+" vo:"+str(vo)+" ib:"+str(math.sin(tick/100)*5)+"\r\n"
+            tick += 1
+            parser.append(data.encode())
+            # app.processEvents()
+
+
+        timer1 = QtCore.QTimer()
+        timer1.timeout.connect(poll_test_data)
+        timer1.start(100)
+        timer2 = QtCore.QTimer()
+        timer2.timeout.connect(update_plot)
+        timer2.start(250)
+        app.exec_()
+
+    elif port.startswith('ble://'):
         address = port[6:]
-        p.setWindowTitle('Serial plotter on BLE device '+address)
+        # p.setWindowTitle('Serial plotter on BLE device '+address)
         print("--- Serial plotter on ", port, "---")
         print("--- Quit: Ctrl-C | Toggle parser debug: Ctrl-D ---")
         loop = QEventLoop(app)
-        srv = http_server(loop)
+        srv = initHttpServer(loop)
         print("--- Http server serving on", srv.sockets[0].getsockname())
         start_task = loop.create_task(ble_serial_open(address))
 
@@ -346,7 +387,7 @@ def main():
             loop.run_until_complete(ble_serial_close())
 
     else:
-        p.setWindowTitle('Serial plotter on '+port+' at '+str(port_speed))
+        # p.setWindowTitle('Serial plotter on '+port+' at '+str(port_speed))
 
         def close():
             global reconnect
@@ -361,6 +402,9 @@ def main():
         timer = QtCore.QTimer()
         timer.timeout.connect(poll_serial)
         timer.start(10)
+        timer2 = QtCore.QTimer()
+        timer2.timeout.connect(update_plot)
+        timer2.start(250)
         app.exec_()
 
 
