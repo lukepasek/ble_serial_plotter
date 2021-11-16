@@ -16,7 +16,6 @@ enableOpenGl = False
 
 if enableOpenGl:
     try:
-
         import OpenGL
         pyqtgraph.setConfigOption('useOpenGL', True)
         pyqtgraph.setConfigOption('enableExperimental', True)
@@ -30,8 +29,8 @@ SERIAL_CHR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
 # port = '/dev/ttyUSB0'
 # port = 'ble://50:65:83:6D:F6:73'
-# port = 'ble://D0:B5:C2:94:3A:98'
-port = "test"
+port = 'ble://D0:B5:C2:94:3A:98'
+# port = "test"
 port_speed = 115200
 reconnect = True
 ble_client = None
@@ -39,13 +38,14 @@ close_event = None
 ctrl_c_cnt = 0
 parser = None
 start_time = time.monotonic_ns()
-num_samples = 30000
-max_range = 600
+num_samples = 3600
+max_range = 1200
 serial_port = None
 t = deque([])
 cnt = -1
 sample_frame = None
 labels = ["vi", "vo", "io", "ib"]
+label_map = {"vi": "vi", "cr": "ib"}
 colors = {
     "vi": 'r',
     "vo": 'y',
@@ -56,24 +56,26 @@ colors = {
 curves = {}
 data = {}
 plotWidget = None
+app = None
+data_changed = False
+
 
 def initQtApp():
     global plotWidget
     QtGui.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
     QtGui.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps)
     app = QtGui.QApplication([])
-    app.setWindowIcon(QtGui.QIcon("icon3.png"))
+    app.setWindowIcon(QtGui.QIcon("icon.png"))
     # pyqtgraph.setConfigOption('antialias', True)
     pyqtgraph.setConfigOption('background', "#202020")
     plotWidget = pyqtgraph.plot()
-    plotWidget.clipToView=True
-    plotWidget.autoDownsample=True
-    plotWidget.skipFiniteCheck=True
+    plotWidget.clipToView = True
+    plotWidget.autoDownsample = True
+    plotWidget.skipFiniteCheck = True
     plotWidget.setYRange(-20, 20, padding=0)
     plotWidget.setXRange(0, max_range, padding=0)
     plotWidget.showGrid(x=True, y=True, alpha=0.3)
     plotWidget.resize(800, 600)
-
 
     for l in labels:
         curve = pyqtgraph.PlotCurveItem(
@@ -86,7 +88,7 @@ def initQtApp():
         curve.setData(x=np.array(t, copy=False), y=np.array(d, copy=False))
 
     inf1 = pyqtgraph.InfiniteLine(movable=True, angle=0, pen='y', hoverPen=(0, 200, 0), label='{value:0.2f}',
-                                labelOpts={'color': 'y', 'movable': True, 'fill': (0, 0, 200, 100)})
+                                  labelOpts={'color': 'y', 'movable': True, 'fill': (0, 0, 200, 100)})
     inf1.setPos([0, 0])
     # vout_high = pg.InfiniteLine(movable=True, angle=0, pen='y', bounds=[-2, 38], hoverPen=(0, 200, 0), label='Absorbtion/Bulk out: {value:0.2f}V',
     #                             labelOpts={'color': 'y', 'movable': True, 'fill': (0, 0, 200, 100)})
@@ -102,13 +104,14 @@ def initQtApp():
 
 
 def plot(values):
-    global cnt, t, sample_frame
+    global cnt, t, sample_frame, data_changed
 
     cnt += 1
+    data_changed = True
     try:
         ts = values["t"]
     except KeyError:
-        ts = (time.monotonic_ns() - start_time)/1000000
+        ts = (time.monotonic_ns() - start_time)/100000000
     if cnt >= num_samples:
         t.rotate(-1)
         t[-1] = ts
@@ -117,19 +120,17 @@ def plot(values):
 
     for l in labels:
         val = None
-        c = curves[l]
         d = data[l]
         if l in values:
             val = values[l]
         else:
             val = 0
-
         if cnt >= num_samples:
             d.rotate(-1)
             d[-1] = val
         else:
             d.append(val)
-        
+
 
 class StreamParser:
     eol = b'\n'
@@ -159,7 +160,13 @@ class StreamParser:
                 if c == 45 or c == 46 or c >= 48 and c <= 57:
                     val.append(c)
                 elif c == 32 or c == 9 or c == 10 or c == 13:
-                    values[tag.decode('ascii')] = float(val.decode('ascii'))
+                    if len(val) > 0:
+                        try:
+                            values[tag.decode('ascii')] = float(
+                                val.decode('ascii'))
+                        except ValueError as e:
+                            print("-- Value error - key/value skipped:",
+                                  tag, val, line, e)
                     tag.clear()
                     val.clear()
                     tag_parse = True
@@ -169,9 +176,15 @@ class StreamParser:
         sample_frame = {}
         sample_frame["__ts"] = time.monotonic_ns()
         # for index, (key, value) in enumerate(values):
+        mapped_values = {}
         for key, value in values.items():
+            mapped_key = label_map.get(key)
+            if mapped_key != None:
+                mapped_values[mapped_key] = value
+            else:
+                mapped_values[key] = value
             sample_frame[key] = value
-        return values
+        return mapped_values
 
     def append(self, data):
         sys.stdout.buffer.write(data)
@@ -218,9 +231,10 @@ async def ble_serial_close():
         print("--- BLE connection not open")
 
 
-def ble_disconnect_handler():
-    print("--- BLE connection closed")
+def ble_disconnect_handler(client):
+    print("--- BLE connection disconected")
     if reconnect:
+        print("--- BLE connection reconnecting")
         close_event.set()
 
 
@@ -229,36 +243,31 @@ async def ble_serial_open(address):
     close_event = asyncio.Event()
 
     print("--- Connecting to BLE device", address)
-    try_cnt = 0
-    while not close_event.is_set() and try_cnt < 50:
+    while not close_event.is_set():
         try:
             ble_client = BleakClient(address)
             ble_client.set_disconnected_callback(ble_disconnect_handler)
             if await ble_client.connect(timeout=3):
                 await ble_client.start_notify(SERIAL_CHR_UUID, lambda i, d: parser.append(d))
                 print("--- BLE connection open")
-                try_cnt = 0
                 await close_event.wait()
                 if reconnect:
                     close_event = asyncio.Event()
-            else:
-                try_cnt += 1
         except BleakError as err:
             print("--- BLE connect error:", err)
-            try_cnt += 1
         except TimeoutError:
             print("--- BLE connect timeout")
-            try_cnt += 1
         except GeneratorExit as err:
             pass
         except asyncio.CancelledError:
-            pass
+            break
         finally:
             if (ble_client.is_connected == True):
                 await ble_serial_close()
 
 close_app = None
 close = None
+
 
 def signalHandler(sig, frame):
     global ctrl_c_cnt
@@ -305,25 +314,33 @@ def initHttpServer(loop):
     srv = loop.run_until_complete(f)
     return srv
 
+
 def update_plot():
-    plotWidget.setUpdatesEnabled(False)
-    end = t[-1]
-    if end>max_range:
-        plotWidget.setXRange(end-max_range, end, padding=0)
-    for l in labels:
-        c = curves[l]
-        d = data[l]
-        c.setData(x=np.array(t, copy=False), y=np.array(d, copy=False))
-    plotWidget.setUpdatesEnabled(True)
+    global data_changed
+    if data_changed:
+        data_changed = False
+        plotWidget.setUpdatesEnabled(False)
+        start = t[0]
+        end = t[-1]
+        if end > max_range:
+            plotWidget.setXRange(end-max_range, end, padding=0)
+        else:
+            plotWidget.setXRange(start, start+max_range, padding=0)
+        for l in labels:
+            c = curves[l]
+            d = data[l]
+            c.setData(x=np.array(t, copy=False), y=np.array(d, copy=False))
+        plotWidget.setUpdatesEnabled(True)
+
 
 def main():
-    global close_app, parser
+    global parser, app
     print()
-
     parser = StreamParser(None)
     app = initQtApp()
-    def close_app():
-        app.quit()
+    timer2 = QtCore.QTimer()
+    timer2.timeout.connect(update_plot)
+    timer2.start(500)
 
     # def plot_init(values):
     #     try:
@@ -348,18 +365,15 @@ def main():
             import math
             vi = 12 + random.randint(0, 100)/100
             vo = 12 + random.randint(0, 100)/100
-            data = "t:"+str(tick)+" vi:"+str(vi)+" vo:"+str(vo)+" ib:"+str(math.sin(tick/100)*5)+"\r\n"
+            data = "t:"+str(tick)+" vi:"+str(vi)+" vo:"+str(vo) + \
+                " ib:"+str(math.sin(tick/100)*5)+"\r\n"
             tick += 1
             parser.append(data.encode())
             # app.processEvents()
 
-
         timer1 = QtCore.QTimer()
         timer1.timeout.connect(poll_test_data)
         timer1.start(100)
-        timer2 = QtCore.QTimer()
-        timer2.timeout.connect(update_plot)
-        timer2.start(250)
         app.exec_()
 
     elif port.startswith('ble://'):
@@ -388,7 +402,6 @@ def main():
 
     else:
         # p.setWindowTitle('Serial plotter on '+port+' at '+str(port_speed))
-
         def close():
             global reconnect
             reconnect = False
@@ -398,13 +411,10 @@ def main():
                 serial_port.cancel_write()
                 serial_port.close()
 
-        app.aboutToQuit.disconnect(close)
         timer = QtCore.QTimer()
         timer.timeout.connect(poll_serial)
         timer.start(10)
-        timer2 = QtCore.QTimer()
-        timer2.timeout.connect(update_plot)
-        timer2.start(250)
+        app.aboutToQuit.connect(close)
         app.exec_()
 
 
