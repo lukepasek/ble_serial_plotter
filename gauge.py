@@ -18,18 +18,22 @@ cnt = 0
 ser_dev = None
 port = '/dev/ttyUSB0'
 port_speed = 115200
-buffer = bytearray()
+buffer = bytearray(1024*8)
+buffer_mem = memoryview(buffer)
+buffer_ptr = 0
+buffer_len = 0
+buffer_offset = 0
 
 
-def parse(data, start, end):
+def parse(mem, start, end):
     values = {}
     tag_parse = True
     tag = bytearray()
     val = bytearray()
 
-    for c in memoryview(data)[start:end]:
-        if c == 10 or c == 13:
-            break
+    for c in mem[start:end]:
+        # if c == 10 or c == 13:
+        #     break
         if tag_parse:
             if c == 58:
                 tag_parse = False
@@ -47,22 +51,40 @@ def parse(data, start, end):
         values[tag.decode()] = float(str(val.decode()))
     except ValueError:
         print('ValueError: Missing value for:', tag.decode())
+        return None
     return values
 
 
 def process_data(data):
-    global buffer
-    buffer.extend(data)
-    if data.rfind(eol) > -1:
-        ls = 0
-        le = buffer.find(eol)
+    global buffer, buffer_offset, buffer_ptr, buffer_len
+    data_len = len(data)
+    mem_offset = buffer_ptr
+    buffer_ptr = buffer_ptr+data_len
+    dst_mem = buffer_mem[mem_offset:buffer_ptr]
+    dst_mem[:] = data
+    if buffer.rfind(eol, buffer_offset, buffer_ptr) > -1:
+        ls = buffer_offset
+        le = buffer.find(eol, ls, buffer_ptr)
         while le > -1:
             if buffer[ls] != 35 and le > ls:
-                values = parse(buffer, ls, le)
+                values = parse(buffer_mem, ls, le)
                 root.set_values(values)
             ls = le + 2
-            le = buffer.find(eol, ls)
-        buffer = buffer[ls:]
+            le = buffer.find(eol, ls, buffer_ptr)
+        if ls == buffer_ptr:
+            buffer_ptr = 0
+            buffer_offset = 0
+        else:
+            if buffer_ptr > (1024*6):
+                left = buffer_ptr-buffer_offset
+                dst_mem = buffer_mem[0:left]
+                dst_mem[:] = buffer_mem[buffer_offset:buffer_ptr]
+                buffer_ptr = left
+                buffer_offset = 0
+            else:
+                buffer_offset = ls
+            # print("left in buffer", buffer_ptr -
+            #       buffer_offset, "at", buffer_offset)
 
 
 class InputChunkProtocol(asyncio.Protocol):
