@@ -26,10 +26,9 @@ if enableOpenGl:
 SERIAL_SVC_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 SERIAL_CHR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
-
-# port = '/dev/ttyUSB0'
+port = '/dev/ttyUSB0'
 # port = 'ble://50:65:83:6D:F6:73'
-port = 'ble://D0:B5:C2:94:3A:98'
+# port = 'ble://D0:B5:C2:94:3A:98'
 # port = "test"
 port_speed = 115200
 reconnect = True
@@ -45,7 +44,7 @@ t = deque([])
 cnt = -1
 sample_frame = None
 labels = ["vi", "vo", "io", "ib"]
-label_map = {"vi": "vi", "cr": "ib"}
+label_map = {"vi": "vi", "cr": "ib", "mcl": "io"}
 colors = {
     "vi": 'r',
     "vo": 'y',
@@ -133,8 +132,11 @@ def plot(values):
 
 
 class StreamParser:
-    eol = b'\n'
-    line_buffer = bytearray()
+    EOL = b'\r\n'
+    line_buffer = bytearray(1024*8)
+    buffer_mem = memoryview(line_buffer)
+    buffer_ptr = 0
+    buffer_offset = 0
     line_callback = None
 
     def set_line_callback(self, callback):
@@ -186,26 +188,72 @@ class StreamParser:
             sample_frame[key] = value
         return mapped_values
 
-    def append(self, data):
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
-        self.line_buffer.extend(data)
-        line_src = self.line_buffer
-        sol_ptr = 0
-        eol_ptr = line_src.find(self.eol, sol_ptr)
-        while eol_ptr > -1:
-            line = line_src[sol_ptr:eol_ptr]
-            if len(line) > 0 and line[0] != 35:
-                try:
-                    values = self.parse_line(line)
+    def process_data(self, data):
+        eol = self.EOL
+        buffer = self.line_buffer
+        data_len = len(data)
+        mem_offset = self.buffer_ptr
+        self.buffer_ptr = self.buffer_ptr+data_len
+        dst_mem = self.buffer_mem[mem_offset:self.buffer_ptr]
+        dst_mem[:] = data
+        if buffer.rfind(eol, self.buffer_offset, self.buffer_ptr) > -1:
+            ls = self.buffer_offset
+            le = buffer.find(eol, ls, self.buffer_ptr)
+            while le > -1:
+                if buffer[ls] != 35 and le > ls:
+                    values = self.parse_line(self.buffer_mem[ls:le])
                     if not self.line_callback == None:
                         self.line_callback(values)
-                except ValueError as e:
-                    print("-- Value error - line skipped:", line, e)
-            sol_ptr = eol_ptr + 1
-            eol_ptr = line_src.find(self.eol, sol_ptr)
-        if sol_ptr:
-            self.line_buffer = line_src[sol_ptr:]
+                ls = le + 2
+                le = buffer.find(eol, ls, self.buffer_ptr)
+            if ls == self.buffer_ptr:
+                self.buffer_ptr = 0
+                self.buffer_offset = 0
+            else:
+                if self.buffer_ptr > (1024*6):
+                    left = self.buffer_ptr-self.buffer_offset
+                    dst_mem = self.buffer_mem[0:left]
+                    dst_mem[:] = self.buffer_mem[self.buffer_offset:self.buffer_ptr]
+                    self.buffer_ptr = left
+                    self.buffer_offset = 0
+                else:
+                    self.buffer_offset = ls
+
+    # def append(self, data):
+    #     sys.stdout.buffer.write(data)
+    #     sys.stdout.buffer.flush()
+    #     self.line_buffer.extend(data)
+    #     line_src = self.line_buffer
+    #     sol_ptr = 0
+    #     eol_ptr = line_src.find(self.eol, sol_ptr)
+    #     while eol_ptr > -1:
+    #         line = line_src[sol_ptr:eol_ptr]
+    #         if len(line) > 0 and line[0] != 35:
+    #             try:
+    #                 values = self.parse_line(line)
+    #                 if not self.line_callback == None:
+    #                     self.line_callback(values)
+    #             except ValueError as e:
+    #                 print("-- Value error - line skipped:", line, e)
+    #         sol_ptr = eol_ptr + 1
+    #         eol_ptr = line_src.find(self.eol, sol_ptr)
+    #     if sol_ptr:
+    #         self.line_buffer = line_src[sol_ptr:]
+
+    # def append2(self, data):
+    #     buffer = self.line_buffer
+    #     buffer.extend(data)
+    #     if data.rfind(EOL) > -1:
+    #         ls = 0
+    #         le = buffer.find(EOL)
+    #         while le > -1:
+    #             if buffer[ls] != 35 and le > ls:
+    #                 values = parse_line(buffer, ls, le)
+    #                 if not self.line_callback == None:
+    #                     self.line_callback(values)
+    #             ls = le + 2
+    #             le = buffer.find(EOL, ls)
+    #         buffer = buffer[ls:]
 
 
 def poll_serial():
@@ -213,10 +261,10 @@ def poll_serial():
     if not serial_port and reconnect:
         serial_port = serial.Serial(port, port_speed, timeout=0)
         print("--- Serial port open:", port)
-    data = serial_port.read(128)
-    while len(data) > 0:
-        parser.append(data)
-        data = serial_port.read(128)
+    data = serial_port.read_all()
+    while data and len(data) > 0:
+        parser.process_data(data)
+        data = serial_port.read_all()
 
 
 async def ble_serial_close():
@@ -340,7 +388,7 @@ def main():
     app = initQtApp()
     timer2 = QtCore.QTimer()
     timer2.timeout.connect(update_plot)
-    timer2.start(500)
+    timer2.start(100)
 
     # def plot_init(values):
     #     try:
