@@ -43,14 +43,13 @@ serial_port = None
 t = deque([])
 cnt = -1
 sample_frame = None
-labels = ["vi", "vo", "io", "ib"]
-label_map = {"vi": "vi", "cr": "ib", "mcl": "io"}
+labels = ["vs", "vb", "is", "iba"]
+label_map = {}
 colors = {
-    "vi": 'r',
-    "vo": 'y',
-    "io": 'm',
-    "ib": 'g',
-    "pwr": 'w'
+    "vs": 'r',
+    "vb": 'y',
+    "is": 'm',
+    "iba": 'g'
 }
 curves = {}
 data = {}
@@ -153,6 +152,7 @@ class StreamParser:
         val = bytearray()
         tag_parse = True
         for c in line:
+            sys.stdout.write(chr(c))
             if tag_parse:
                 if c == 58:
                     tag_parse = False
@@ -172,7 +172,8 @@ class StreamParser:
                     tag.clear()
                     val.clear()
                     tag_parse = True
-
+        sys.stdout.write('\n')
+        sys.stdout.flush()
         if (len(tag) > 0 and len(val) > 0):
             values[tag.decode('ascii')] = float(val.decode('ascii'))
         sample_frame = {}
@@ -296,7 +297,7 @@ async def ble_serial_open(address):
             ble_client = BleakClient(address)
             ble_client.set_disconnected_callback(ble_disconnect_handler)
             if await ble_client.connect(timeout=3):
-                await ble_client.start_notify(SERIAL_CHR_UUID, lambda i, d: parser.append(d))
+                await ble_client.start_notify(SERIAL_CHR_UUID, lambda i, d: parser.process_data(d))
                 print("--- BLE connection open")
                 await close_event.wait()
                 if reconnect:
@@ -305,8 +306,8 @@ async def ble_serial_open(address):
             print("--- BLE connect error:", err)
         except TimeoutError:
             print("--- BLE connect timeout")
-        except GeneratorExit as err:
-            pass
+        # except GeneratorExit as err:
+        #     pass
         except asyncio.CancelledError:
             break
         finally:
