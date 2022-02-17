@@ -26,9 +26,9 @@ if enableOpenGl:
 SERIAL_SVC_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb"
 SERIAL_CHR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 
-port = '/dev/ttyUSB0'
+# port = '/dev/ttyUSB0'
 # port = 'ble://50:65:83:6D:F6:73'
-# port = 'ble://D0:B5:C2:94:3A:98'
+port = 'ble://D0:B5:C2:94:3A:98'
 # port = "test"
 port_speed = 115200
 reconnect = True
@@ -43,13 +43,13 @@ serial_port = None
 t = deque([])
 cnt = -1
 sample_frame = None
-labels = ["vs", "vb", "is", "iba"]
+labels = ["vs", "vb", "is", "ib"]
 label_map = {}
 colors = {
     "vs": 'r',
     "vb": 'y',
     "is": 'm',
-    "iba": 'g'
+    "ib": 'g'
 }
 curves = {}
 data = {}
@@ -152,7 +152,7 @@ class StreamParser:
         val = bytearray()
         tag_parse = True
         for c in line:
-            sys.stdout.write(chr(c))
+            # sys.stdout.write(chr(c))
             if tag_parse:
                 if c == 58:
                     tag_parse = False
@@ -172,8 +172,8 @@ class StreamParser:
                     tag.clear()
                     val.clear()
                     tag_parse = True
-        sys.stdout.write('\n')
-        sys.stdout.flush()
+        # sys.stdout.write('\n')
+        # sys.stdout.flush()
         if (len(tag) > 0 and len(val) > 0):
             values[tag.decode('ascii')] = float(val.decode('ascii'))
         sample_frame = {}
@@ -190,6 +190,8 @@ class StreamParser:
         return mapped_values
 
     def process_data(self, data):
+        sys.stdout.write(data.decode('ascii'))
+        sys.stdout.flush()
         eol = self.EOL
         buffer = self.line_buffer
         data_len = len(data)
